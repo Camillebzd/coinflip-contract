@@ -30,6 +30,15 @@ describe("Coinflip", function () {
     return { owner, otherUser, coinflip };
   }
 
+  // function to fund the contract
+  const fundContract = async (owner: HardhatEthersSigner, coinflip: Coinflip, amount: bigint) => {
+    await (await owner.sendTransaction({
+      to: await coinflip.getAddress(),
+      value: amount,
+    })).wait();
+  };
+
+
   describe("Deployment", function () {
     it("Should the entropy oracle", async function () {
       const { coinflip } = await loadFixture(deployFixture);
@@ -58,7 +67,7 @@ describe("Coinflip", function () {
         value: amountToBet,
       })).wait();
 
-      await expect(coinflip.flipCoin(userRandomNumber, { value: (fee + amountToBet) }))
+      await expect(coinflip.flipCoin(userRandomNumber, true, { value: (fee + amountToBet) }))
         .to.emit(coinflip, "FlipCoin")
         .withArgs(owner.address, anyValue, userRandomNumber, amountToBet);
     });
@@ -68,7 +77,7 @@ describe("Coinflip", function () {
       const userRandomNumber = hre.ethers.randomBytes(32);
       const fee = await coinflip.getFee();
 
-      await expect(coinflip.flipCoin(userRandomNumber, { value: fee - 1n })).to.be.revertedWithCustomError(coinflip, "NotRightAmount()");
+      await expect(coinflip.flipCoin(userRandomNumber, true, { value: fee - 1n })).to.be.revertedWithCustomError(coinflip, "NotRightAmount()");
     });
 
     it("Should revert if only fees paid (bet amount 0)", async function () {
@@ -76,7 +85,7 @@ describe("Coinflip", function () {
       const userRandomNumber = hre.ethers.randomBytes(32);
       const fee = await coinflip.getFee();
 
-      await expect(coinflip.flipCoin(userRandomNumber, { value: fee })).to.be.revertedWithCustomError(coinflip, "NotRightAmount()");
+      await expect(coinflip.flipCoin(userRandomNumber, true, { value: fee })).to.be.revertedWithCustomError(coinflip, "NotRightAmount()");
     });
 
     it("Should revert if contract balance is inferior than the user's bet", async function () {
@@ -85,25 +94,32 @@ describe("Coinflip", function () {
       const fee = await coinflip.getFee();
       const amountToBet = hre.ethers.parseEther("10");
 
-      await expect(coinflip.flipCoin(userRandomNumber, { value: fee + amountToBet })).to.be.revertedWithCustomError(coinflip, "NotEnoughFunds()");
+      await expect(coinflip.flipCoin(userRandomNumber, true, { value: fee + amountToBet })).to.be.revertedWithCustomError(coinflip, "NotEnoughFunds()");
+    });
+
+    it("Should revert if user tries to flip before callback triggered", async function () {
+      const { owner, coinflip } = await loadFixture(deployFixture);
+      const userRandomNumber = hre.ethers.randomBytes(32);
+      const fee = await coinflip.getFee();
+      const amountToBet = hre.ethers.parseEther("10");
+
+      // Fund the contract
+      await fundContract(owner, coinflip, amountToBet);
+
+      // Flip the coin first time correctly
+      await (await coinflip.flipCoin(userRandomNumber, true, { value: fee + amountToBet })).wait();
+
+      // Flip before callback triggered
+      await expect(coinflip.flipCoin(userRandomNumber, true, { value: fee + amountToBet })).to.be.revertedWithCustomError(coinflip, "CantFlipDuringResolve()");
     });
 
 
     describe("Coin flipped", function () {
-
-      // function to fund the contract
-      const fundContract = async (owner: HardhatEthersSigner, coinflip: Coinflip, amount: bigint) => {
-        await (await owner.sendTransaction({
-          to: await coinflip.getAddress(),
-          value: amount,
-        })).wait();
-      };
-
       // function to create a flip
-      const flipCoin = async (coinflip: Coinflip, amountToBet: bigint) => {
+      const flipCoin = async (coinflip: Coinflip, amountToBet: bigint, isHeads: boolean) => {
         const userRandomNumber = hre.ethers.randomBytes(32);
         const fee = await coinflip.getFee();
-        const tx = await coinflip.flipCoin(userRandomNumber, { value: (fee + amountToBet) });
+        const tx = await coinflip.flipCoin(userRandomNumber, isHeads, { value: (fee + amountToBet) });
         const receipt = await tx.wait();
 
         return {
@@ -114,11 +130,11 @@ describe("Coinflip", function () {
         }
       }
 
-      it("Should emit won and send twice bet amount", async function () {
+      it("Should emit won and send twice bet amount (Heads selected)", async function () {
         const { owner, coinflip } = await loadFixture(deployFixture);
         const amountToBet = hre.ethers.parseEther("10");
         await fundContract(owner, coinflip, amountToBet);
-        const { receipt: flipReceipt } = await flipCoin(coinflip, amountToBet);
+        const { receipt: flipReceipt } = await flipCoin(coinflip, amountToBet, true);
 
         // Access the Flip event and get sequence number
         const flipEvent = flipReceipt?.logs
@@ -162,11 +178,59 @@ describe("Coinflip", function () {
           .withArgs(owner.address, flipSequenceNumber, randomNumber + 1, amountToBet);
       });
 
-      it("Should emit lost and send nothing", async function () {
+      it("Should emit won and send twice bet amount (Tails selected)", async function () {
         const { owner, coinflip } = await loadFixture(deployFixture);
         const amountToBet = hre.ethers.parseEther("10");
         await fundContract(owner, coinflip, amountToBet);
-        const { receipt: flipReceipt } = await flipCoin(coinflip, amountToBet);
+        const { receipt: flipReceipt } = await flipCoin(coinflip, amountToBet, false);
+
+        // Access the Flip event and get sequence number
+        const flipEvent = flipReceipt?.logs
+          .map(log => coinflip.interface.parseLog(log))
+          .find(log => log?.name === "FlipCoin");
+
+        if (!flipEvent) {
+          console.log("FlipCoin event not found in transaction receipt");
+          return;
+        }
+
+        const flipSequenceNumber = flipEvent.args.sequenceNumber;
+
+        const userBalanceBefore = await hre.ethers.provider.getBalance(owner.address);
+
+        // Trigger the callback manually
+        const randomNumber = 20;
+        const randomNumberBytes = hre.ethers.toBeHex(randomNumber, 32);
+
+        const tx = await coinflip.testTriggerCallback(flipSequenceNumber, randomNumberBytes);
+        const receipt = await tx.wait();
+
+        if (!receipt) {
+          console.log("Error: receipt empty");
+          return;
+        }
+
+        const gasUsed = receipt.gasUsed;
+        const gasPrice = receipt.gasPrice;
+        const gasCost = gasUsed * gasPrice;
+
+        const userBalanceAfter = await hre.ethers.provider.getBalance(owner.address);
+        const expectedBalance = userBalanceBefore - gasCost + amountToBet * 2n;
+
+        // check the balance
+        expect(userBalanceAfter).to.equals(expectedBalance);
+
+        // check the event
+        await expect(tx)
+          .to.emit(coinflip, "Won")
+          .withArgs(owner.address, flipSequenceNumber, randomNumber + 1, amountToBet);
+      });
+
+      it("Should emit lost and send nothing (Heads selected)", async function () {
+        const { owner, coinflip } = await loadFixture(deployFixture);
+        const amountToBet = hre.ethers.parseEther("10");
+        await fundContract(owner, coinflip, amountToBet);
+        const { receipt: flipReceipt } = await flipCoin(coinflip, amountToBet, true);
 
         // Access the Flip event and get sequence number
         const flipEvent = flipReceipt?.logs
@@ -184,6 +248,56 @@ describe("Coinflip", function () {
 
         // Trigger the callback manually
         const randomNumber = 10;
+        const randomNumberBytes = hre.ethers.toBeHex(randomNumber, 32);
+
+        const tx = await coinflip.testTriggerCallback(flipSequenceNumber, randomNumberBytes);
+        const receipt = await tx.wait();
+
+        if (!receipt) {
+          console.log("Error: receipt empty");
+          return;
+        }
+
+        const gasUsed = receipt.gasUsed;
+        const gasPrice = receipt.gasPrice;
+        const gasCost = gasUsed * gasPrice;
+
+        const userBalanceAfter = await hre.ethers.provider.getBalance(owner.address);
+        const expectedBalance = userBalanceBefore - gasCost;
+
+        // check the balance
+        expect(userBalanceAfter).to.equals(expectedBalance);
+        // amountToBet * 2 because the contract was funded with the same amount at the beginning
+        expect(await hre.ethers.provider.getBalance(await coinflip.getAddress())).to.equals(amountToBet * 2n);
+
+        // check the event
+        await expect(tx)
+          .to.emit(coinflip, "Lost")
+          .withArgs(owner.address, flipSequenceNumber, randomNumber + 1, amountToBet);
+      });
+
+      it("Should emit lost and send nothing (Tails selected)", async function () {
+        const { owner, coinflip } = await loadFixture(deployFixture);
+        const amountToBet = hre.ethers.parseEther("10");
+        await fundContract(owner, coinflip, amountToBet);
+        const { receipt: flipReceipt } = await flipCoin(coinflip, amountToBet, false);
+
+        // Access the Flip event and get sequence number
+        const flipEvent = flipReceipt?.logs
+          .map(log => coinflip.interface.parseLog(log))
+          .find(log => log?.name === "FlipCoin");
+
+        if (!flipEvent) {
+          console.log("FlipCoin event not found in transaction receipt");
+          return;
+        }
+
+        const flipSequenceNumber = flipEvent.args.sequenceNumber;
+
+        const userBalanceBefore = await hre.ethers.provider.getBalance(owner.address);
+
+        // Trigger the callback manually
+        const randomNumber = 90;
         const randomNumberBytes = hre.ethers.toBeHex(randomNumber, 32);
 
         const tx = await coinflip.testTriggerCallback(flipSequenceNumber, randomNumberBytes);

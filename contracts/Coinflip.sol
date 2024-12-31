@@ -20,8 +20,15 @@ contract Coinflip is IEntropyConsumer, Ownable {
     IEntropy public entropy;
     address public entropyProvider;
 
+    enum CoinSide {
+        Default,
+        Heads,
+        Tails       
+    }
+
     mapping(uint64 => address) users;
-    mapping(address => uint256) userBet;
+    mapping(address => uint256) userBetAmount;
+    mapping(address => CoinSide) userBetCoinSide;
 
     event FlipCoin(
         address indexed user,
@@ -42,6 +49,7 @@ contract Coinflip is IEntropyConsumer, Ownable {
         uint256 betAmount
     );
 
+    error CantFlipDuringResolve();
     error NotRightAmount();
     error NotEnoughFunds();
     error FailedToSendXTZ();
@@ -60,7 +68,9 @@ contract Coinflip is IEntropyConsumer, Ownable {
         if (!success) revert FailedToSendXTZ();
     }
 
-    function flipCoin(bytes32 userRandomNumber) external payable returns (uint64) {
+    function flipCoin(bytes32 userRandomNumber, bool isHeads) external payable returns (uint64) {
+        if (userBetCoinSide[msg.sender] != CoinSide.Default) revert CantFlipDuringResolve();
+
         // Pyth fees
         uint256 fee = getFee();
 
@@ -80,10 +90,18 @@ contract Coinflip is IEntropyConsumer, Ownable {
         users[sequenceNumber] = msg.sender;
 
         // Store the player bet amount
-        userBet[msg.sender] = amountBet;
+        userBetAmount[msg.sender] = amountBet;
+
+        // Store the player bet coin side
+        userBetCoinSide[msg.sender] = isHeads ? CoinSide.Heads : CoinSide.Tails;
 
         emit FlipCoin(msg.sender, sequenceNumber, userRandomNumber, amountBet);
         return sequenceNumber;
+    }
+
+    // get a number and say if it is heads or tails
+    function numberToCoinSide(uint256 finalNumber) public pure returns (CoinSide) {
+        return finalNumber > 50 ? CoinSide.Heads : CoinSide.Tails;
     }
 
     // TEST ONLY, remove on real contract
@@ -99,8 +117,9 @@ contract Coinflip is IEntropyConsumer, Ownable {
     ) internal override {
         uint256 finalNumber = mapRandomNumber(randomNumber, 1, 100);
         address user = users[sequenceNumber];
-        uint256 amountBet = userBet[user];
-        bool winned = finalNumber > 50; // wining condition is the number is greater than 50
+        uint256 amountBet = userBetAmount[user];
+        CoinSide resultSide = numberToCoinSide(finalNumber);
+        bool winned = resultSide == userBetCoinSide[user];
 
         // lose if the number is less than or equal to 50
         if (winned) {
@@ -110,7 +129,8 @@ contract Coinflip is IEntropyConsumer, Ownable {
             emit Lost(user, sequenceNumber, finalNumber, amountBet);
         }
         delete users[sequenceNumber];
-        delete userBet[user];
+        delete userBetAmount[user];
+        delete userBetCoinSide[user];
     }
 
     // This method is required by the IEntropyConsumer interface.
