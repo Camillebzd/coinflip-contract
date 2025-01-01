@@ -34,7 +34,8 @@ contract Coinflip is IEntropyConsumer, Ownable {
         address indexed user,
         uint64 sequenceNumber,
         bytes32 userRandomNumber,
-        uint256 betAmount
+        uint256 betAmount,
+        bool isHeads
     );
     event Won(
         address indexed user,
@@ -95,7 +96,7 @@ contract Coinflip is IEntropyConsumer, Ownable {
         // Store the player bet coin side
         userBetCoinSide[msg.sender] = isHeads ? CoinSide.Heads : CoinSide.Tails;
 
-        emit FlipCoin(msg.sender, sequenceNumber, userRandomNumber, amountBet);
+        emit FlipCoin(msg.sender, sequenceNumber, userRandomNumber, amountBet, isHeads);
         return sequenceNumber;
     }
 

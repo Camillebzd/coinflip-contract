@@ -60,6 +60,7 @@ describe("Coinflip", function () {
       const userRandomNumber = hre.ethers.randomBytes(32);
       const fee = await coinflip.getFee();
       const amountToBet = hre.ethers.parseEther("10");
+      const isHeads = true;
 
       // Fund the contract
       await (await owner.sendTransaction({
@@ -67,9 +68,9 @@ describe("Coinflip", function () {
         value: amountToBet,
       })).wait();
 
-      await expect(coinflip.flipCoin(userRandomNumber, true, { value: (fee + amountToBet) }))
+      await expect(coinflip.flipCoin(userRandomNumber, isHeads, { value: (fee + amountToBet) }))
         .to.emit(coinflip, "FlipCoin")
-        .withArgs(owner.address, anyValue, userRandomNumber, amountToBet);
+        .withArgs(owner.address, anyValue, userRandomNumber, amountToBet, isHeads);
     });
 
     it("Should revert if fees not paid", async function () {
