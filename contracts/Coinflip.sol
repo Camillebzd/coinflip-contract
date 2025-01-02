@@ -12,10 +12,6 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 // Uncomment this line to use console.log
 // import "hardhat/console.sol";
 
-// /!\ There is no protection against the fact that multiple flips could be triggered at 
-// the same time with an amount equal to the contract balance, and the first one to be processed 
-// by the entropy callback winning would lead all the others to fail (if it is a win).
-// This is a known issue and should be fixed in the production version of the contract.
 contract Coinflip is IEntropyConsumer, Ownable {
     IEntropy public entropy;
     address public entropyProvider;
@@ -29,6 +25,8 @@ contract Coinflip is IEntropyConsumer, Ownable {
     mapping(uint64 => address) users;
     mapping(address => uint256) userBetAmount;
     mapping(address => CoinSide) userBetCoinSide;
+
+    uint256 public currentBetAmount;
 
     event FlipCoin(
         address indexed user,
@@ -78,8 +76,7 @@ contract Coinflip is IEntropyConsumer, Ownable {
         if (msg.value <= fee) revert NotRightAmount();
 
         uint256 amountBet = msg.value - fee;
-
-        if (address(this).balance < amountBet * 2) revert NotEnoughFunds();
+        if (address(this).balance - fee < (amountBet + currentBetAmount) * 2) revert NotEnoughFunds();
 
         // Request the random number with the callback
         uint64 sequenceNumber = entropy.requestWithCallback{value: fee}(
@@ -95,6 +92,9 @@ contract Coinflip is IEntropyConsumer, Ownable {
 
         // Store the player bet coin side
         userBetCoinSide[msg.sender] = isHeads ? CoinSide.Heads : CoinSide.Tails;
+
+        // Increase current bet amount
+        currentBetAmount += amountBet;
 
         emit FlipCoin(msg.sender, sequenceNumber, userRandomNumber, amountBet, isHeads);
         return sequenceNumber;
@@ -132,6 +132,9 @@ contract Coinflip is IEntropyConsumer, Ownable {
         delete users[sequenceNumber];
         delete userBetAmount[user];
         delete userBetCoinSide[user];
+
+        // decrease current bet amount
+        currentBetAmount -= amountBet;
     }
 
     // This method is required by the IEntropyConsumer interface.
