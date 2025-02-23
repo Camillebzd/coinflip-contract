@@ -9,9 +9,6 @@ import {IEntropy} from "@pythnetwork/entropy-sdk-solidity/IEntropy.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
-// Uncomment this line to use console.log
-// import "hardhat/console.sol";
-
 contract Coinflip is IEntropyConsumer, Ownable {
     IEntropy public entropy;
     address public entropyProvider;
@@ -19,7 +16,7 @@ contract Coinflip is IEntropyConsumer, Ownable {
     enum CoinSide {
         Default,
         Heads,
-        Tails       
+        Tails
     }
 
     mapping(uint64 => address) users;
@@ -53,22 +50,35 @@ contract Coinflip is IEntropyConsumer, Ownable {
     error NotEnoughFunds();
     error FailedToSendXTZ();
 
-    constructor(
-        address entropyAddress
-    ) Ownable(msg.sender) {
+    constructor(address entropyAddress) Ownable(msg.sender) {
         entropy = IEntropy(entropyAddress);
         entropyProvider = entropy.getDefaultProvider();
     }
 
     receive() external payable {}
 
-    function withdrawFunds() external onlyOwner {
-        (bool success, ) = owner().call{value: address(this).balance}("");
-        if (!success) revert FailedToSendXTZ();
+    // TEST ONLY, remove on real contract
+    // function testTriggerCallback(uint64 sequenceNumber, bytes32 randomNumber) external {
+    //     entropyCallback(sequenceNumber, entropyProvider, randomNumber);
+    // }
+
+    // function withdrawFunds() external onlyOwner {
+    //     (bool success, ) = owner().call{value: address(this).balance}("");
+    //     if (!success) revert FailedToSendXTZ();
+    // }
+
+    function getFee() public view returns (uint256) {
+        uint256 fee = entropy.getFee(entropyProvider);
+
+        return fee;
     }
 
-    function flipCoin(bytes32 userRandomNumber, bool isHeads) external payable returns (uint64) {
-        if (userBetCoinSide[msg.sender] != CoinSide.Default) revert CantFlipDuringResolve();
+    function flipCoin(
+        bytes32 userRandomNumber,
+        bool isHeads
+    ) external payable returns (uint64) {
+        if (userBetCoinSide[msg.sender] != CoinSide.Default)
+            revert CantFlipDuringResolve();
 
         // Pyth fees
         uint256 fee = getFee();
@@ -76,7 +86,8 @@ contract Coinflip is IEntropyConsumer, Ownable {
         if (msg.value <= fee) revert NotRightAmount();
 
         uint256 amountBet = msg.value - fee;
-        if (address(this).balance - fee < (amountBet + currentBetAmount) * 2) revert NotEnoughFunds();
+        if (address(this).balance - fee < (amountBet + currentBetAmount) * 2)
+            revert NotEnoughFunds();
 
         // Request the random number with the callback
         uint64 sequenceNumber = entropy.requestWithCallback{value: fee}(
@@ -96,19 +107,22 @@ contract Coinflip is IEntropyConsumer, Ownable {
         // Increase current bet amount
         currentBetAmount += amountBet;
 
-        emit FlipCoin(msg.sender, sequenceNumber, userRandomNumber, amountBet, isHeads);
+        emit FlipCoin(
+            msg.sender,
+            sequenceNumber,
+            userRandomNumber,
+            amountBet,
+            isHeads
+        );
         return sequenceNumber;
     }
 
     // get a number and say if it is heads or tails
-    function numberToCoinSide(uint256 finalNumber) public pure returns (CoinSide) {
+    function numberToCoinSide(
+        uint256 finalNumber
+    ) public pure returns (CoinSide) {
         return finalNumber > 50 ? CoinSide.Heads : CoinSide.Tails;
     }
-
-    // TEST ONLY, remove on real contract
-    // function testTriggerCallback(uint64 sequenceNumber, bytes32 randomNumber) external {
-    //     entropyCallback(sequenceNumber, entropyProvider, randomNumber);
-    // }
 
     // It is called by the entropy contract when a random number is generated.
     function entropyCallback(
@@ -122,7 +136,7 @@ contract Coinflip is IEntropyConsumer, Ownable {
         CoinSide resultSide = numberToCoinSide(finalNumber);
         bool winned = resultSide == userBetCoinSide[user];
 
-        // lose if the number is less than or equal to 50
+        // 50% chance to win
         if (winned) {
             sendReward(user, amountBet);
             emit Won(user, sequenceNumber, finalNumber, amountBet);
@@ -143,12 +157,6 @@ contract Coinflip is IEntropyConsumer, Ownable {
         return address(entropy);
     }
 
-    function getFee() public view returns (uint256) {
-        uint256 fee = entropy.getFee(entropyProvider);
-
-        return fee;
-    }
-
     // Maps a random number into a range between minRange and maxRange (inclusive)
     function mapRandomNumber(
         bytes32 randomNumber,
@@ -161,10 +169,7 @@ contract Coinflip is IEntropyConsumer, Ownable {
     }
 
     // send twice the amount bet to the user if he wins
-    function sendReward(
-        address user,
-        uint256 amountBet
-    ) internal {
+    function sendReward(address user, uint256 amountBet) internal {
         (bool sent, ) = payable(user).call{value: amountBet * 2}("");
         if (!sent) revert FailedToSendXTZ();
     }

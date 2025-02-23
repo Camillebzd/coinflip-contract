@@ -22,6 +22,11 @@ const ETHERLINK_API_KEY =
   process.env.ETHERLINK_API_KEY ||
   "";
 
+// Monad testnet
+const MONAD_TESTNET_RPC_URL =
+  process.env.MONAD_TESTNET_RPC_URL ||
+  "https://testnet-rpc.monad.xyz";
+
 const config: HardhatUserConfig = {
   solidity: "0.8.20",
   defaultNetwork: "hardhat",
@@ -48,7 +53,22 @@ const config: HardhatUserConfig = {
       url: ETHERLINK_RPC_URL,
       accounts: [PRIVATE_KEY],
     },
+    monadTestnet: {
+      chainId: 10143,
+      url: MONAD_TESTNET_RPC_URL,
+      accounts: [PRIVATE_KEY],
+    }
   },
+  // if you want to verify contracts on Monad
+  // sourcify: {
+  //   enabled: true,
+  //   apiUrl: "https://sourcify-api-monad.blockvision.org",
+  //   browserUrl: "https://testnet.monadexplorer.com/"
+  // },
+  // etherscan: {
+  //     enabled: false,
+  // },
+  // if you want to verify contracts on Etherlink
   etherscan: {
     apiKey: {
       etherlinkTestnet: ETHERLINK_TESTNET_API_KEY,
